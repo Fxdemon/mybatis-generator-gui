@@ -4,17 +4,21 @@ package com.zzg.mybatis.generator.model;
  * Created by Owen on 6/14/16.
  */
 public enum DbType {
-    MYSQL("com.mysql.jdbc.Driver", "jdbc:mysql://%s:%s?useUnicode=true&useSSL=false&characterEncoding=%s", "jdbc:mysql://%s:%s/%s?useUnicode=true&useSSL=false&characterEncoding=%s"),
-    ORACLE("oracle.jdbc.driver.OracleDriver", "jdbc:oracle:thin:@%s:%s", "");
+
+    MySQL("com.mysql.jdbc.Driver", "jdbc:mysql://%s:%s/%s?useUnicode=true&useSSL=false&characterEncoding=%s", "mysql-connector-java-5.1.38.jar"),
+    Oracle("oracle.jdbc.driver.OracleDriver", "jdbc:oracle:thin:@%s:%s:%s", "ojdbc14.jar"),
+    PostgreSQL("org.postgresql.Driver", "jdbc:postgresql://%s:%s/%s", "postgresql-9.4.1209.jar"),
+	SQL_Server("com.microsoft.sqlserver.jdbc.SQLServerDriver", "jdbc:sqlserver://%s:%s;databaseName=%s", "sqljdbc4-4.0.jar"),
+	Sqlite("org.sqlite.JDBC", "jdbc:sqlite:%s", "sqlite-jdbc-3.19.3.jar");
 
     private final String driverClass;
     private final String connectionUrlPattern;
-    private final String fullConnectionUrlPattern;
+    private final String connectorJarFile;
 
-    DbType(String driverClass, String connectionUrlPattern, String fullConnectionUrlPattern) {
+    DbType(String driverClass, String connectionUrlPattern, String connectorJarFile) {
         this.driverClass = driverClass;
         this.connectionUrlPattern = connectionUrlPattern;
-        this.fullConnectionUrlPattern = fullConnectionUrlPattern;
+        this.connectorJarFile = connectorJarFile;
     }
 
     public String getDriverClass() {
@@ -25,7 +29,7 @@ public enum DbType {
         return connectionUrlPattern;
     }
 
-    public String getFullConnectionUrlPattern() {
-        return fullConnectionUrlPattern;
+    public String getConnectorJarFile() {
+        return connectorJarFile;
     }
 }

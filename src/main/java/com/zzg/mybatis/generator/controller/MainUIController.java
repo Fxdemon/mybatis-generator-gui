@@ -1,63 +1,49 @@
 package com.zzg.mybatis.generator.controller;
 
-import java.io.File;
-import java.net.URL;
-import java.util.*;
-
+import com.zzg.mybatis.generator.bridge.MybatisGeneratorBridge;
 import com.zzg.mybatis.generator.model.DatabaseConfig;
-import com.zzg.mybatis.generator.model.DbType;
 import com.zzg.mybatis.generator.model.GeneratorConfig;
+import com.zzg.mybatis.generator.model.UITableColumnVO;
+import com.zzg.mybatis.generator.util.ConfigHelper;
 import com.zzg.mybatis.generator.util.DbUtil;
-import com.zzg.mybatis.generator.util.StringUtils;
-import com.zzg.mybatis.generator.util.XMLConfigHelper;
+import com.zzg.mybatis.generator.util.MyStringUtils;
 import com.zzg.mybatis.generator.view.AlertUtil;
-import com.zzg.mybatis.generator.view.LeftDbTreeCell;
 import com.zzg.mybatis.generator.view.UIProgressCallback;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
-import javafx.event.EventHandler;
-import javafx.event.EventType;
-import javafx.scene.Node;
+import javafx.fxml.FXML;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.TextFieldTreeCell;
+import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseEvent;
-import javafx.scene.text.Text;
+import javafx.stage.DirectoryChooser;
 import javafx.util.Callback;
-import org.apache.commons.configuration2.HierarchicalConfiguration;
-import org.apache.commons.configuration2.XMLConfiguration;
-import org.apache.commons.configuration2.builder.fluent.Configurations;
-import org.apache.commons.configuration2.tree.ImmutableNode;
-import org.mybatis.generator.api.MyBatisGenerator;
-import org.mybatis.generator.api.ProgressCallback;
-import org.mybatis.generator.api.ShellCallback;
-import org.mybatis.generator.api.VerboseProgressCallback;
-import org.mybatis.generator.config.*;
-import org.mybatis.generator.internal.DefaultShellCallback;
+import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.FilenameUtils;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.mybatis.generator.config.ColumnOverride;
+import org.mybatis.generator.config.IgnoredColumn;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.zzg.mybatis.generator.model.DatabaseDTO;
-
-import javafx.fxml.FXML;
-import javafx.fxml.FXMLLoader;
-import javafx.scene.Parent;
-import javafx.scene.Scene;
-import javafx.scene.image.ImageView;
-import javafx.stage.DirectoryChooser;
-import javafx.stage.FileChooser;
-import javafx.stage.FileChooser.ExtensionFilter;
-import javafx.stage.Modality;
-import javafx.stage.Stage;
+import java.io.File;
+import java.net.URL;
+import java.sql.SQLRecoverableException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.ResourceBundle;
 
 public class MainUIController extends BaseFXController {
 
     private static final Logger _LOG = LoggerFactory.getLogger(MainUIController.class);
-
+    private static final String FOLDER_NO_EXIST = "部分目录不存在，是否创建";
     // tool bar buttons
     @FXML
     private Label connectionLabel;
     @FXML
-    private TextField connectorPathField;
+    private Label configsLabel;
     @FXML
     private TextField modelTargetPackage;
     @FXML
@@ -69,6 +55,8 @@ public class MainUIController extends BaseFXController {
     @FXML
     private TextField domainObjectNameField;
     @FXML
+    private TextField generateKeysField;	//主键ID
+    @FXML
     private TextField modelTargetProject;
     @FXML
     private TextField mappingTargetProject;
@@ -77,13 +65,36 @@ public class MainUIController extends BaseFXController {
     @FXML
     private TextField projectFolderField;
     @FXML
-    private TreeView<String> leftDBTree;
+    private CheckBox offsetLimitCheckBox;
     @FXML
-    private TextArea consoleTextArea;
-
+    private CheckBox commentCheckBox;
+    @FXML
+	private CheckBox overrideXML;
+    @FXML
+    private CheckBox needToStringHashcodeEquals;
+    @FXML
+    private CheckBox useTableNameAliasCheckbox;
+    @FXML
+    private CheckBox annotationCheckBox;
+    @FXML
+    private CheckBox useActualColumnNamesCheckbox;
+    @FXML
+    private CheckBox useExample;
+    @FXML
+    private CheckBox useSchemaPrefix;
+    @FXML
+    private TreeView<String> leftDBTree;
+    // Current selected databaseConfig
     private DatabaseConfig selectedDatabaseConfig;
-
+    // Current selected tableName
     private String tableName;
+
+    private List<IgnoredColumn> ignoredColumns;
+
+    private List<ColumnOverride> columnOverrides;
+
+    @FXML
+    private ChoiceBox<String> encodingChoice;
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
@@ -92,8 +103,18 @@ public class MainUIController extends BaseFXController {
         dbImage.setFitWidth(40);
         connectionLabel.setGraphic(dbImage);
         connectionLabel.setOnMouseClicked(event -> {
-            NewConnectionController controller = loadFXMLPage("New Connection", FXMLPage.NEW_CONNECTION);
+            DbConnectionController controller = (DbConnectionController) loadFXMLPage("新建数据库连接", FXMLPage.NEW_CONNECTION, false);
             controller.setMainUIController(this);
+            controller.showDialogStage();
+        });
+        ImageView configImage = new ImageView("icons/config-list.png");
+        configImage.setFitHeight(40);
+        configImage.setFitWidth(40);
+        configsLabel.setGraphic(configImage);
+        configsLabel.setOnMouseClicked(event -> {
+            GeneratorConfigController controller = (GeneratorConfigController) loadFXMLPage("配置", FXMLPage.GENERATOR_CONFIG, false);
+            controller.setMainUIController(this);
+            controller.showDialogStage();
         });
 
         leftDBTree.setShowRoot(false);
@@ -102,80 +123,93 @@ public class MainUIController extends BaseFXController {
         leftDBTree.setCellFactory((TreeView<String> tv) -> {
             TreeCell<String> cell = defaultCellFactory.call(tv);
             cell.addEventHandler(MouseEvent.MOUSE_CLICKED, event -> {
-                if (event.getClickCount() == 2) {
-                    int level = leftDBTree.getTreeItemLevel(cell.getTreeItem());
-                    TreeCell<String> treeCell = (TreeCell<String>) event.getSource();
-                    TreeItem<String> item = treeCell.getTreeItem();
-                    item.setExpanded(true);
-                    if (level == 1) {
-                        DatabaseConfig selectedConfig = (DatabaseConfig) item.getGraphic().getUserData();
-                        // Accept clicks only on node cells, and not on empty spaces of the TreeView
-                        leftDBTree.getSelectionModel().getSelectedItem().setExpanded(true);
-                        System.out.println("Node click: " + selectedConfig);
-                        List<String> schemas = null;
+                int level = leftDBTree.getTreeItemLevel(cell.getTreeItem());
+                TreeCell<String> treeCell = (TreeCell<String>) event.getSource();
+                TreeItem<String> treeItem = treeCell.getTreeItem();
+                if (level == 1) {
+                    final ContextMenu contextMenu = new ContextMenu();
+                    MenuItem item1 = new MenuItem("关闭连接");
+                    item1.setOnAction(event1 -> treeItem.getChildren().clear());
+	                MenuItem item2 = new MenuItem("编辑连接");
+	                item2.setOnAction(event1 -> {
+		                DatabaseConfig selectedConfig = (DatabaseConfig) treeItem.getGraphic().getUserData();
+		                DbConnectionController controller = (DbConnectionController) loadFXMLPage("编辑数据库连接", FXMLPage.NEW_CONNECTION, false);
+		                controller.setMainUIController(this);
+		                controller.setConfig(selectedConfig);
+		                controller.showDialogStage();
+	                });
+                    MenuItem item3 = new MenuItem("删除连接");
+                    item3.setOnAction(event1 -> {
+                        DatabaseConfig selectedConfig = (DatabaseConfig) treeItem.getGraphic().getUserData();
                         try {
-                            schemas = DbUtil.getSchemas(selectedConfig);
-                            System.out.println(schemas);
-                            if (schemas != null && schemas.size() > 0) {
-                                ObservableList<TreeItem<String>> children = cell.getTreeItem().getChildren();
-                                children.clear();
-                                for (String schema : schemas) {
-                                    TreeItem<String> treeItem = new TreeItem<>();
-                                    ImageView imageView = new ImageView("icons/database.png");
-                                    imageView.setFitHeight(16);
-                                    imageView.setFitWidth(16);
-                                    treeItem.setGraphic(imageView);
-                                    treeItem.setValue(schema);
-                                    children.add(treeItem);
-                                }
-                            }
+                            ConfigHelper.deleteDatabaseConfig(selectedConfig);
+                            this.loadLeftDBTree();
                         } catch (Exception e) {
-                            e.printStackTrace();
+                            AlertUtil.showErrorAlert("Delete connection failed! Reason: " + e.getMessage());
                         }
-                    } else if (level == 2) {
+                    });
+                    contextMenu.getItems().addAll(item1, item2, item3);
+                    cell.setContextMenu(contextMenu);
+                }
+                if (event.getClickCount() == 2) {
+                    treeItem.setExpanded(true);
+                    if (level == 1) {
                         System.out.println("index: " + leftDBTree.getSelectionModel().getSelectedIndex());
-                        DatabaseConfig selectedConfig = (DatabaseConfig) item.getParent().getGraphic().getUserData();
-                        String schema = treeCell.getTreeItem().getValue();
+                        DatabaseConfig selectedConfig = (DatabaseConfig) treeItem.getGraphic().getUserData();
                         try {
-                            List<String> tables = DbUtil.getTableNames(selectedConfig, schema);
+                            List<String> tables = DbUtil.getTableNames(selectedConfig);
                             if (tables != null && tables.size() > 0) {
                                 ObservableList<TreeItem<String>> children = cell.getTreeItem().getChildren();
                                 children.clear();
                                 for (String tableName : tables) {
-                                    TreeItem<String> treeItem = new TreeItem<>();
+                                    TreeItem<String> newTreeItem = new TreeItem<>();
                                     ImageView imageView = new ImageView("icons/table.png");
                                     imageView.setFitHeight(16);
                                     imageView.setFitWidth(16);
-                                    treeItem.setGraphic(imageView);
-                                    treeItem.setValue(tableName);
-                                    children.add(treeItem);
+                                    newTreeItem.setGraphic(imageView);
+                                    newTreeItem.setValue(tableName);
+                                    children.add(newTreeItem);
                                 }
                             }
+                        } catch (SQLRecoverableException e) {
+                            _LOG.error(e.getMessage(), e);
+                            AlertUtil.showErrorAlert("连接超时");
                         } catch (Exception e) {
-                            e.printStackTrace();
+                            _LOG.error(e.getMessage(), e);
+                            AlertUtil.showErrorAlert(e.getMessage());
                         }
-                    } else if (level == 3) {
+                    } else if (level == 2) { // left DB tree level3
                         String tableName = treeCell.getTreeItem().getValue();
-                        selectedDatabaseConfig = (DatabaseConfig)item.getParent().getParent().getGraphic().getUserData();
-                        String schema = (String)item.getParent().getValue();
-                        selectedDatabaseConfig.setSchema(schema);
+                        selectedDatabaseConfig = (DatabaseConfig) treeItem.getParent().getGraphic().getUserData();
                         this.tableName = tableName;
                         tableNameField.setText(tableName);
-                        domainObjectNameField.setText(StringUtils.dbStringToCamelStyle(tableName));
+                        domainObjectNameField.setText(MyStringUtils.dbStringToCamelStyle(tableName));
                     }
                 }
             });
             return cell;
         });
         loadLeftDBTree();
-    }
+		setTooltip();
+		//默认选中第一个，否则如果忘记选择，没有对应错误提示
+        encodingChoice.getSelectionModel().selectFirst();
+	}
+	
+	private void setTooltip() {
+		encodingChoice.setTooltip(new Tooltip("生成文件的编码，必选"));
+		generateKeysField.setTooltip(new Tooltip("insert时可以返回主键ID"));
+		offsetLimitCheckBox.setTooltip(new Tooltip("是否要生成分页查询代码"));
+		commentCheckBox.setTooltip(new Tooltip("使用数据库的列注释作为实体类字段名的Java注释 "));
+		useActualColumnNamesCheckbox.setTooltip(new Tooltip("是否使用数据库实际的列名作为实体类域的名称"));
+		useTableNameAliasCheckbox.setTooltip(new Tooltip("在Mapper XML文件中表名使用别名，并且列全部使用as查询"));
+		overrideXML.setTooltip(new Tooltip("重新生成时把原XML文件覆盖，否则是追加"));
+	}
 
     void loadLeftDBTree() {
         TreeItem rootTreeItem = leftDBTree.getRoot();
         rootTreeItem.getChildren().clear();
-        List<DatabaseConfig> dbConfigs = null;
         try {
-            dbConfigs = XMLConfigHelper.loadDatabaseConfig();
+            List<DatabaseConfig> dbConfigs = ConfigHelper.loadDatabaseConfig();
             for (DatabaseConfig dbConfig : dbConfigs) {
                 TreeItem<String> treeItem = new TreeItem<>();
                 treeItem.setValue(dbConfig.getName());
@@ -187,17 +221,8 @@ public class MainUIController extends BaseFXController {
                 rootTreeItem.getChildren().add(treeItem);
             }
         } catch (Exception e) {
-            e.printStackTrace();
-            // show error TODO
-        }
-    }
-
-    @FXML
-    public void chooseConnectorFile() {
-        FileChooser directoryChooser = new FileChooser();
-        File selectedFolder = directoryChooser.showOpenDialog(getPrimaryStage());
-        if (selectedFolder != null) {
-            connectorPathField.setText(selectedFolder.getAbsolutePath());
+            _LOG.error("connect db failed, reason: {}", e);
+            AlertUtil.showErrorAlert(e.getMessage() + "\n" + ExceptionUtils.getStackTrace(e));
         }
     }
 
@@ -211,104 +236,180 @@ public class MainUIController extends BaseFXController {
     }
 
     @FXML
-    public void generateCode() throws Exception {
-        Configuration config = new Configuration();
-        config.addClasspathEntry(connectorPathField.getText());
-        Context context = new Context(ModelType.CONDITIONAL);
-        config.addContext(context);
-        // Table config
-        TableConfiguration tableConfig = new TableConfiguration(context);
-        tableConfig.setTableName(tableNameField.getText());
-        tableConfig.setDomainObjectName(domainObjectNameField.getText());
-        // JDBC config
-        if (selectedDatabaseConfig == null) {
-            AlertUtil.showInfoAlert("Please select the table from left DB tree");
+    public void generateCode() {
+        if (tableName == null) {
+            AlertUtil.showWarnAlert("请先在左侧选择数据库表");
             return;
         }
-        JDBCConnectionConfiguration jdbcConfig = new JDBCConnectionConfiguration();
-        jdbcConfig.setDriverClass(DbType.valueOf(selectedDatabaseConfig.getDbType()).getDriverClass());
-        jdbcConfig.setConnectionURL(DbUtil.getConnectionUrlWithSchema(selectedDatabaseConfig));
-        jdbcConfig.setUserId(selectedDatabaseConfig.getUsername());
-        jdbcConfig.setPassword(selectedDatabaseConfig.getPassword());
-        // java model
-        JavaModelGeneratorConfiguration modelConfig = new JavaModelGeneratorConfiguration();
-        modelConfig.setTargetPackage(modelTargetPackage.getText());
-        modelConfig.setTargetProject(projectFolderField.getText() + "/" + modelTargetProject.getText());
-        // Mapper config
-        SqlMapGeneratorConfiguration mapperConfig = new SqlMapGeneratorConfiguration();
-        mapperConfig.setTargetPackage(mapperTargetPackage.getText());
-        mapperConfig.setTargetProject(projectFolderField.getText() + "/" + mappingTargetProject.getText());
-        // DAO
-        JavaClientGeneratorConfiguration daoConfig = new JavaClientGeneratorConfiguration();
-        daoConfig.setConfigurationType("XMLMAPPER");
-        daoConfig.setTargetPackage(daoTargetPackage.getText());
-        daoConfig.setTargetProject(projectFolderField.getText() + "/" + daoTargetProject.getText());
-        // Comment
-        CommentGeneratorConfiguration commentConfig = new CommentGeneratorConfiguration();
-        commentConfig.addProperty("suppressAllComments", "true");
-        commentConfig.addProperty("suppressDate", "true");
+        String result = validateConfig();
+		if (result != null) {
+			AlertUtil.showErrorAlert(result);
+			return;
+		}
+        GeneratorConfig generatorConfig = getGeneratorConfigFromUI();
+        if (!checkDirs(generatorConfig)) {
+            return;
+        }
 
-        context.setId("myid");
-        context.addTableConfiguration(tableConfig);
-        context.setJdbcConnectionConfiguration(jdbcConfig);
-        context.setJdbcConnectionConfiguration(jdbcConfig);
-        context.setJavaModelGeneratorConfiguration(modelConfig);
-        context.setSqlMapGeneratorConfiguration(mapperConfig);
-        context.setJavaClientGeneratorConfiguration(daoConfig);
-        context.setCommentGeneratorConfiguration(commentConfig);
-        // limit/offset插件
-        PluginConfiguration pluginConfiguration = new PluginConfiguration();
-        pluginConfiguration.addProperty("type", "com.zzg.mybatis.generator.plugins.MySQLLimitPlugin");
-        pluginConfiguration.setConfigurationType("com.zzg.mybatis.generator.plugins.MySQLLimitPlugin");
-        context.addPluginConfiguration(pluginConfiguration);
+        MybatisGeneratorBridge bridge = new MybatisGeneratorBridge();
+        bridge.setGeneratorConfig(generatorConfig);
+        bridge.setDatabaseConfig(selectedDatabaseConfig);
+        bridge.setIgnoredColumns(ignoredColumns);
+        bridge.setColumnOverrides(columnOverrides);
+		UIProgressCallback alert = new UIProgressCallback(Alert.AlertType.INFORMATION);
+		bridge.setProgressCallback(alert);
+		alert.show();
+		try {
+            bridge.generate();
+        } catch (Exception e) {
+			e.printStackTrace();
+            AlertUtil.showErrorAlert(e.getMessage());
+        }
+    }
 
-        context.setTargetRuntime("MyBatis3");
+	private String validateConfig() {
+		String projectFolder = projectFolderField.getText();
+		if (StringUtils.isEmpty(projectFolder))  {
+			return "项目目录不能为空";
+		}
+		if (StringUtils.isEmpty(domainObjectNameField.getText()))  {
+			return "类名不能为空";
+		}
+		if (StringUtils.isAnyEmpty(modelTargetPackage.getText(), mapperTargetPackage.getText(), daoTargetPackage.getText())) {
+			return "包名不能为空";
+		}
 
-        List<String> warnings = new ArrayList<>();
-        Set<String> fullyqualifiedTables = new HashSet<String>();
-        Set<String> contexts = new HashSet<>();
-        ProgressCallback progressCallback = new UIProgressCallback(consoleTextArea);
+		return null;
+	}
 
-        ShellCallback shellCallback = new DefaultShellCallback(true); // override=true
-        MyBatisGenerator myBatisGenerator = new MyBatisGenerator(config, shellCallback, warnings);
-        myBatisGenerator.generate(progressCallback, contexts, fullyqualifiedTables);
+	@FXML
+    public void saveGeneratorConfig() {
+        TextInputDialog dialog = new TextInputDialog("");
+        dialog.setTitle("保存当前配置");
+        dialog.setContentText("请输入配置名称");
+        Optional<String> result = dialog.showAndWait();
+        if (result.isPresent()) {
+            String name = result.get();
+            if (StringUtils.isEmpty(name)) {
+                AlertUtil.showErrorAlert("名称不能为空");
+                return;
+            }
+            _LOG.info("user choose name: {}", name);
+            try {
+                GeneratorConfig generatorConfig = getGeneratorConfigFromUI();
+                generatorConfig.setName(name);
+                ConfigHelper.saveGeneratorConfig(generatorConfig);
+            } catch (Exception e) {
+                AlertUtil.showErrorAlert("删除配置失败");
+            }
+        }
     }
 
     public GeneratorConfig getGeneratorConfigFromUI() {
         GeneratorConfig generatorConfig = new GeneratorConfig();
-        generatorConfig.setConnectorJarPath(connectorPathField.getText());
         generatorConfig.setProjectFolder(projectFolderField.getText());
         generatorConfig.setModelPackage(modelTargetPackage.getText());
+        generatorConfig.setGenerateKeys(generateKeysField.getText());
         generatorConfig.setModelPackageTargetFolder(modelTargetProject.getText());
         generatorConfig.setDaoPackage(daoTargetPackage.getText());
         generatorConfig.setDaoTargetFolder(daoTargetProject.getText());
         generatorConfig.setMappingXMLPackage(mapperTargetPackage.getText());
         generatorConfig.setMappingXMLTargetFolder(mappingTargetProject.getText());
+        generatorConfig.setTableName(tableNameField.getText());
+        generatorConfig.setDomainObjectName(domainObjectNameField.getText());
+        generatorConfig.setOffsetLimit(offsetLimitCheckBox.isSelected());
+        generatorConfig.setComment(commentCheckBox.isSelected());
+        generatorConfig.setOverrideXML(overrideXML.isSelected());
+        generatorConfig.setNeedToStringHashcodeEquals(needToStringHashcodeEquals.isSelected());
+        generatorConfig.setUseTableNameAlias(useTableNameAliasCheckbox.isSelected());
+        generatorConfig.setAnnotation(annotationCheckBox.isSelected());
+        generatorConfig.setUseActualColumnNames(useActualColumnNamesCheckbox.isSelected());
+        generatorConfig.setEncoding(encodingChoice.getValue());
+        generatorConfig.setUseExampe(useExample.isSelected());
+        generatorConfig.setUseSchemaPrefix(useSchemaPrefix.isSelected());
         return generatorConfig;
     }
 
     public void setGeneratorConfigIntoUI(GeneratorConfig generatorConfig) {
-        connectorPathField.setText(generatorConfig.getConnectorJarPath());
         projectFolderField.setText(generatorConfig.getProjectFolder());
         modelTargetPackage.setText(generatorConfig.getModelPackage());
-        modelTargetProject.setText(generatorConfig.getModelPackage());
+        generateKeysField.setText(generatorConfig.getGenerateKeys());
+        modelTargetProject.setText(generatorConfig.getModelPackageTargetFolder());
         daoTargetPackage.setText(generatorConfig.getDaoPackage());
-        daoTargetProject.setText(generatorConfig.getDaoPackage());
+        daoTargetProject.setText(generatorConfig.getDaoTargetFolder());
         mapperTargetPackage.setText(generatorConfig.getMappingXMLPackage());
         mappingTargetProject.setText(generatorConfig.getMappingXMLTargetFolder());
+        encodingChoice.setValue(generatorConfig.getEncoding());
     }
 
     @FXML
     public void openTableColumnCustomizationPage() {
-        SelectTableColumnController controller = loadFXMLPage("Select Columns", FXMLPage.SELECT_TABLE_COLUMN);
+        if (tableName == null) {
+            AlertUtil.showWarnAlert("请先在左侧选择数据库表");
+            return;
+        }
+        SelectTableColumnController controller = (SelectTableColumnController) loadFXMLPage("定制列", FXMLPage.SELECT_TABLE_COLUMN, true);
         controller.setMainUIController(this);
         try {
-            List<String> tableColumns = DbUtil.getTableColumns(selectedDatabaseConfig, selectedDatabaseConfig.getSchema(), tableName);
-            controller.setColumnList(tableColumns);
+            // If select same schema and another table, update table data
+            if (!tableName.equals(controller.getTableName())) {
+                List<UITableColumnVO> tableColumns = DbUtil.getTableColumns(selectedDatabaseConfig, tableName);
+                controller.setColumnList(FXCollections.observableList(tableColumns));
+                controller.setTableName(tableName);
+            }
+            controller.showDialogStage();
         } catch (Exception e) {
-            e.printStackTrace();
             _LOG.error(e.getMessage(), e);
+            AlertUtil.showErrorAlert(e.getMessage());
         }
+    }
+
+    public void setIgnoredColumns(List<IgnoredColumn> ignoredColumns) {
+        this.ignoredColumns = ignoredColumns;
+    }
+
+    public void setColumnOverrides(List<ColumnOverride> columnOverrides) {
+        this.columnOverrides = columnOverrides;
+    }
+
+    /**
+     * 检查并创建不存在的文件夹
+     *
+     * @return
+     */
+    private boolean checkDirs(GeneratorConfig config) {
+		List<String> dirs = new ArrayList<>();
+		dirs.add(config.getProjectFolder());
+		dirs.add(FilenameUtils.normalize(config.getProjectFolder().concat("/").concat(config.getModelPackageTargetFolder())));
+		dirs.add(FilenameUtils.normalize(config.getProjectFolder().concat("/").concat(config.getDaoTargetFolder())));
+		dirs.add(FilenameUtils.normalize(config.getProjectFolder().concat("/").concat(config.getMappingXMLTargetFolder())));
+		boolean haveNotExistFolder = false;
+		for (String dir : dirs) {
+			File file = new File(dir);
+			if (!file.exists()) {
+				haveNotExistFolder = true;
+			}
+		}
+		if (haveNotExistFolder) {
+			Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+			alert.setContentText(FOLDER_NO_EXIST);
+			Optional<ButtonType> optional = alert.showAndWait();
+			if (optional.isPresent()) {
+				if (ButtonType.OK == optional.get()) {
+					try {
+						for (String dir : dirs) {
+							FileUtils.forceMkdir(new File(dir));
+						}
+						return true;
+					} catch (Exception e) {
+						AlertUtil.showErrorAlert("创建目录失败，请检查目录是否是文件而非目录");
+					}
+				} else {
+					return false;
+				}
+			}
+		}
+        return true;
     }
 
 }
