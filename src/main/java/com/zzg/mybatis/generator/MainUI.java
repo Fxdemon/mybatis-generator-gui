@@ -15,7 +15,7 @@ import javax.swing.*;
 import java.net.URL;
 
 /**
- * 这是本软件的主入口,要运行本软件请直接运行本类就可以了,不用传入任何参数()
+ * 这是本软件的主入口,要运行本软件请直接运行本类就可以了,不用传入任何参数
  */
 public class MainUI extends Application {
 
